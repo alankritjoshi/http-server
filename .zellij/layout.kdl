@@ -1,0 +1,17 @@
+layout {
+    pane split_direction="vertical" {
+        pane edit="app/server.go" {
+            name "Editing HTTP Server"
+            size "65%"
+        }
+        pane command="go" {
+            name "Test - Start Server"
+            start_suspended true
+            args "run" "app/server.go"
+        }
+    }
+    pane size=1 borderless=true {
+        plugin location="zellij:compact-bar"
+    }
+}
+
