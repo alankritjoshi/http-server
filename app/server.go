@@ -90,6 +90,7 @@ func HTTPMessage(protocol string, headers *[]string, content *string) string {
 
 	if headers != nil {
 		builder.WriteString(strings.Join(*headers, "\r\n"))
+		builder.WriteString("\r\n")
 	}
 
 	builder.WriteString("\r\n")
@@ -135,6 +136,8 @@ func main() {
 			fmt.Println("Failed to send OK response for root request")
 			os.Exit(1)
 		}
+
+		return
 	}
 
 	if len(pathSplit) < 2 || pathSplit[1] != "echo" {
@@ -142,6 +145,8 @@ func main() {
 			fmt.Println("Failed to send NOT FOUND response for non-echo request")
 			os.Exit(1)
 		}
+
+		return
 	}
 
 	responseType := OK
