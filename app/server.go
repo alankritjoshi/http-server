@@ -128,9 +128,9 @@ func main() {
 	}
 
 	responseType := OK
-	contentType := "Content-Type: text/html\r\n"
-	contentLength := "Content-Length: 11\r\n\r\n"
-	content := pathSplit[1]
+	contentType := "Content-Type: text/plain\r\n"
+	content := strings.Join(pathSplit[1:], "/")
+	contentLength := fmt.Sprintf("Content-Length: %d\r\n\r\n", len(content))
 
 	if err := client.send(ctx, []string{
 		responseType,
