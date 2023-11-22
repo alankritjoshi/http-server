@@ -113,7 +113,7 @@ func main() {
 	path := strings.Split(startLine, " ")[1]
 	pathSplit := strings.Split(path, "/")
 
-	if len(pathSplit) < 2 {
+	if len(pathSplit) < 2 || pathSplit[1] != "echo" {
 		if err := client.send(ctx, []string{NOT_FOUND}); err != nil {
 			fmt.Println("Failed to send response")
 			os.Exit(1)
