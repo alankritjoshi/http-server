@@ -46,7 +46,7 @@ func (c *Client) receive(ctx context.Context) ([]string, error) {
 	return lines, nil
 }
 
-func (c *Client) send(ctx context.Context, lines []string) error {
+func (c *Client) send(ctx context.Context, message string) error {
 	deadline, ok := ctx.Deadline()
 	if ok {
 		c.conn.SetWriteDeadline(deadline)
@@ -56,12 +56,11 @@ func (c *Client) send(ctx context.Context, lines []string) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
-		for _, line := range lines {
-			_, err := c.writer.WriteString(line)
-			if err != nil {
-				return err
-			}
+		_, err := c.writer.WriteString(message)
+		if err != nil {
+			return fmt.Errorf("unable to send message to %s", c.clientID)
 		}
+
 		return c.writer.Flush()
 	}
 }
@@ -84,8 +83,22 @@ func NewClient(l net.Listener, clientID string) (*Client, error) {
 	}, nil
 }
 
-func HTTPString(line string) string {
-	return fmt.Sprintf("%s\r\n", line)
+func HTTPMessage(protocol string, headers *[]string, content *string) string {
+	var builder strings.Builder
+
+	builder.WriteString(protocol + "\r\n")
+
+	if headers != nil {
+		builder.WriteString(strings.Join(*headers, "\r\n"))
+	}
+
+	builder.WriteString("\r\n")
+
+	if content != nil {
+		builder.WriteString(*content + "\r\n")
+	}
+
+	return builder.String()
 }
 
 func main() {
@@ -118,31 +131,35 @@ func main() {
 	pathSplit := strings.Split(path, "/")
 
 	if len(pathSplit) == 2 && pathSplit[1] == "" {
-		if err := client.send(ctx, []string{HTTPString(OK)}); err != nil {
+		if err := client.send(ctx, HTTPMessage(OK, nil, nil)); err != nil {
 			fmt.Println("Failed to send OK response for root request")
 			os.Exit(1)
 		}
 	}
 
 	if len(pathSplit) < 2 || pathSplit[1] != "echo" {
-		if err := client.send(ctx, []string{HTTPString(NOT_FOUND)}); err != nil {
+		if err := client.send(ctx, HTTPMessage(NOT_FOUND, nil, nil)); err != nil {
 			fmt.Println("Failed to send NOT FOUND response for non-echo request")
 			os.Exit(1)
 		}
 	}
 
-	responseType := HTTPString(OK)
-	contentType := HTTPString("Content-Type: text/plain")
-	content := HTTPString(strings.Join(pathSplit[1:], "/"))
-	contentLength := HTTPString(fmt.Sprintf("Content-Length: %d", len(content)))
+	responseType := OK
+	contentType := "Content-Type: text/plain"
+	content := strings.Join(pathSplit[1:], "/")
+	contentLength := fmt.Sprintf("Content-Length: %d", len(content))
 
-	if err := client.send(ctx, []string{
-		responseType,
-		contentType,
-		HTTPString(""),
-		contentLength,
-		content,
-	}); err != nil {
+	if err := client.send(
+		ctx,
+		HTTPMessage(
+			responseType,
+			&[]string{
+				contentType,
+				contentLength,
+			},
+			&content,
+		),
+	); err != nil {
 		fmt.Println("Failed to send OK response for echo request")
 		os.Exit(1)
 	}
