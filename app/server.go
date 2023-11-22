@@ -8,6 +8,11 @@ import (
 	"strings"
 )
 
+const (
+	OK        = "HTTP/1.1 200 OK\r\n\r\n"
+	NOT_FOUND = "HTTP/1.1 404 NOT FOUND\r\n\r\n"
+)
+
 func main() {
 	l, err := net.Listen("tcp", "localhost:4221")
 	if err != nil {
@@ -42,7 +47,15 @@ func main() {
 		}
 	}
 
-	response := "HTTP/1.1 200 OK\r\n\r\n"
+	request := strings.Split(requestBuilder.String(), "\r\n")
+	startLine := request[0]
+	path := strings.Split(startLine, " ")[1]
+
+	response := OK
+
+	if path != "/" {
+		response = NOT_FOUND
+	}
 
 	_, err = conn.Write([]byte(response))
 	if err != nil {
