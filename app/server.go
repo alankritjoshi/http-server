@@ -149,16 +149,20 @@ func main() {
 	content := strings.Join(pathSplit[2:], "/")
 	contentLength := fmt.Sprintf("Content-Length: %d", len(content))
 
+	httpMessage := HTTPMessage(
+		responseType,
+		&[]string{
+			contentType,
+			contentLength,
+		},
+		&content,
+	)
+
+	fmt.Println(httpMessage)
+
 	if err := client.send(
 		ctx,
-		HTTPMessage(
-			responseType,
-			&[]string{
-				contentType,
-				contentLength,
-			},
-			&content,
-		),
+		httpMessage,
 	); err != nil {
 		fmt.Println("Failed to send OK response for echo request")
 		os.Exit(1)
