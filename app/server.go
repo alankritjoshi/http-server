@@ -113,9 +113,16 @@ func main() {
 	path := strings.Split(startLine, " ")[1]
 	pathSplit := strings.Split(path, "/")
 
+	if len(pathSplit) == 0 && pathSplit[0] == "" {
+		if err := client.send(ctx, []string{OK}); err != nil {
+			fmt.Println("Failed to send OK response for root request")
+			os.Exit(1)
+		}
+	}
+
 	if len(pathSplit) < 2 || pathSplit[1] != "echo" {
 		if err := client.send(ctx, []string{NOT_FOUND}); err != nil {
-			fmt.Println("Failed to send response")
+			fmt.Println("Failed to send NOT FOUND response for non-echo request")
 			os.Exit(1)
 		}
 	}
@@ -125,10 +132,13 @@ func main() {
 	contentLength := "Content-Length: 11\r\n\r\n"
 	content := pathSplit[1]
 
-	client.send(ctx, []string{
+	if err := client.send(ctx, []string{
 		responseType,
 		contentType,
 		contentLength,
 		content,
-	})
+	}); err != nil {
+		fmt.Println("Failed to send OK response for echo request")
+		os.Exit(1)
+	}
 }
