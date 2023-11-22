@@ -2,17 +2,13 @@ package main
 
 import (
 	"fmt"
-	// Uncomment this block to pass the first stage
+	"io"
 	"net"
 	"os"
+	"strings"
 )
 
 func main() {
-	// You can use print statements as follows for debugging, they'll be visible when running tests.
-	fmt.Println("Logs from your program will appear here!")
-
-	// Uncomment this block to pass the first stage
-
 	l, err := net.Listen("tcp", "localhost:4221")
 	if err != nil {
 		fmt.Println("Failed to bind to port 4221")
@@ -26,6 +22,25 @@ func main() {
 	}
 
 	defer conn.Close()
+
+	buffer := make([]byte, 1024)
+	var requestBuilder strings.Builder
+
+	for {
+		n, err := conn.Read(buffer)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			fmt.Println("Error reading request:", err.Error())
+			return
+		}
+
+		requestBuilder.Write(buffer[:n])
+		if strings.Contains(requestBuilder.String(), "\r\n\r\n") {
+			break
+		}
+	}
 
 	response := "HTTP/1.1 200 OK\r\n\r\n"
 
