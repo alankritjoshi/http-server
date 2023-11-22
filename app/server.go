@@ -113,7 +113,7 @@ func main() {
 	path := strings.Split(startLine, " ")[1]
 	pathSplit := strings.Split(path, "/")
 
-	if len(pathSplit) == 0 && pathSplit[0] == "" {
+	if len(pathSplit) == 2 && pathSplit[1] == "" {
 		if err := client.send(ctx, []string{OK}); err != nil {
 			fmt.Println("Failed to send OK response for root request")
 			os.Exit(1)
