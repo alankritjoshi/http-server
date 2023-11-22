@@ -111,19 +111,22 @@ func main() {
 
 	startLine := request[0]
 	path := strings.Split(startLine, " ")[1]
+	pathSplit := strings.Split(path, "/")
 
-	response := OK
-
-	if path != "/" {
-		response = NOT_FOUND
+	if len(pathSplit) < 2 {
+		if err := client.send(ctx, []string{NOT_FOUND}); err != nil {
+			fmt.Println("Failed to send response")
+			os.Exit(1)
+		}
 	}
 
+	responseType := OK
 	contentType := "Content-Type: text/html\r\n"
 	contentLength := "Content-Length: 11\r\n\r\n"
-	content := "Hello World"
+	content := pathSplit[1]
 
 	client.send(ctx, []string{
-		response,
+		responseType,
 		contentType,
 		contentLength,
 		content,
