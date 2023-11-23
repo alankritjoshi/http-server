@@ -23,27 +23,53 @@ type Client struct {
 	clientID string
 }
 
-func (c *Client) receive(ctx context.Context) ([]string, error) {
+type Request struct {
+	Protocol string
+	Headers  map[string]string
+}
+
+func (c *Client) receive(ctx context.Context) (*Request, error) {
 	deadline, ok := ctx.Deadline()
 	if ok {
 		c.conn.SetReadDeadline(deadline)
 	}
 
-	var lines []string
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-		line, err := c.reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				break
+	headers := make(map[string]string)
+	var request Request
+
+	protocolProcessed := false
+	headersProcessed := false
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+			line, err := c.reader.ReadString('\n')
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				return nil, err
 			}
-			return nil, err
+
+			line = strings.TrimSuffix(line, "\r\n")
+
+			if !protocolProcessed {
+				request.Protocol = line
+				protocolProcessed = true
+			} else if !headersProcessed && len(line) == 0 {
+				request.Headers = headers
+				headersProcessed = true
+			} else if !headersProcessed {
+				headerSplit := strings.Split(line, ": ")
+				headers[headerSplit[0]] = headerSplit[1]
+				return &request, nil
+			} else {
+				return nil, fmt.Errorf("invalid request")
+			}
 		}
-		lines = append(lines, strings.TrimRight(line, "\r\n"))
 	}
-	return lines, nil
 }
 
 func (c *Client) send(ctx context.Context, message string) error {
@@ -127,7 +153,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	startLine := request[0]
+	startLine := request.Protocol
+	fmt.Println(startLine)
 	path := strings.Split(startLine, " ")[1]
 	pathSplit := strings.Split(path, "/")
 
@@ -140,19 +167,26 @@ func main() {
 		return
 	}
 
-	if len(pathSplit) < 2 || pathSplit[1] != "echo" {
+	responseType := OK
+	contentType := "Content-Type: text/plain"
+	var content string
+	var contentLength string
+
+	switch pathSplit[1] {
+	case "echo":
+		content = strings.Join(pathSplit[2:], "/")
+	case "user-agent":
+		content = request.Headers["User-Agent"]
+	default:
+		responseType = NOT_FOUND
 		if err := client.send(ctx, HTTPMessage(NOT_FOUND, nil, nil)); err != nil {
-			fmt.Println("Failed to send NOT FOUND response for non-echo request")
+			fmt.Println("Failed to send NOT FOUND response for invalid request")
 			os.Exit(1)
 		}
-
 		return
 	}
 
-	responseType := OK
-	contentType := "Content-Type: text/plain"
-	content := strings.Join(pathSplit[2:], "/")
-	contentLength := fmt.Sprintf("Content-Length: %d", len(content))
+	contentLength = fmt.Sprintf("Content-Length: %d", len(content))
 
 	httpMessage := HTTPMessage(
 		responseType,
