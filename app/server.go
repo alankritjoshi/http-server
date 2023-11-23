@@ -60,11 +60,10 @@ func (c *Client) receive(ctx context.Context) (*Request, error) {
 				protocolProcessed = true
 			} else if !headersProcessed && len(line) == 0 {
 				request.Headers = headers
-				headersProcessed = true
+				return &request, nil
 			} else if !headersProcessed {
 				headerSplit := strings.Split(line, ": ")
 				headers[headerSplit[0]] = headerSplit[1]
-				return &request, nil
 			} else {
 				return nil, fmt.Errorf("invalid request")
 			}
@@ -154,7 +153,6 @@ func main() {
 	}
 
 	startLine := request.Protocol
-	fmt.Println(startLine)
 	path := strings.Split(startLine, " ")[1]
 	pathSplit := strings.Split(path, "/")
 
@@ -196,8 +194,6 @@ func main() {
 		},
 		&content,
 	)
-
-	fmt.Println(httpMessage)
 
 	if err := client.send(
 		ctx,
