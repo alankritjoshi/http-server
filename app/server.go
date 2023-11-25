@@ -11,15 +11,14 @@ import (
 )
 
 const (
-	OK        = "HTTP/1.1 200 OK"
-	NOT_FOUND = "HTTP/1.1 404 NOT FOUND"
+	ok        = "HTTP/1.1 200 OK"
+	not_found = "HTTP/1.1 404 NOT FOUND"
 )
 
-type Client struct {
-	conn     net.Conn
-	reader   *bufio.Reader
-	writer   *bufio.Writer
-	clientID int
+type client struct {
+	conn   net.Conn
+	reader *bufio.Reader
+	writer *bufio.Writer
 }
 
 type Request struct {
@@ -27,7 +26,7 @@ type Request struct {
 	Protocol string
 }
 
-func (c *Client) receive(ctx context.Context) (*Request, error) {
+func (c *client) receive(ctx context.Context) (*Request, error) {
 	deadline, ok := ctx.Deadline()
 	if ok {
 		c.conn.SetReadDeadline(deadline)
@@ -70,7 +69,7 @@ func (c *Client) receive(ctx context.Context) (*Request, error) {
 	}
 }
 
-func (c *Client) send(ctx context.Context, message string) error {
+func (c *client) send(ctx context.Context, message string) error {
 	deadline, ok := ctx.Deadline()
 	if ok {
 		c.conn.SetWriteDeadline(deadline)
@@ -82,23 +81,22 @@ func (c *Client) send(ctx context.Context, message string) error {
 	default:
 		_, err := c.writer.WriteString(message)
 		if err != nil {
-			return fmt.Errorf("unable to send message to %s", c.clientID)
+			return fmt.Errorf("unable to send message to client")
 		}
 
 		return c.writer.Flush()
 	}
 }
 
-func (c *Client) close() {
+func (c *client) close() {
 	c.conn.Close()
 }
 
-func NewClient(conn net.Conn, clientID int) (*Client, error) {
-	return &Client{
-		conn:     conn,
-		reader:   bufio.NewReader(conn),
-		writer:   bufio.NewWriter(conn),
-		clientID: clientID,
+func newClient(conn net.Conn) (*client, error) {
+	return &client{
+		conn:   conn,
+		reader: bufio.NewReader(conn),
+		writer: bufio.NewWriter(conn),
 	}, nil
 }
 
@@ -121,6 +119,75 @@ func HTTPMessage(protocol string, headers *[]string, content *string) string {
 	return builder.String()
 }
 
+func handleConnection(conn net.Conn) {
+	client, err := newClient(conn)
+	if err != nil {
+		fmt.Println("Failed to accept client connection")
+		return
+	}
+
+	defer client.close()
+
+	ctx := context.Background()
+
+	request, err := client.receive(ctx)
+	if err != nil {
+		fmt.Println("Failed to receive request")
+		return
+	}
+
+	startLine := request.Protocol
+	path := strings.Split(startLine, " ")[1]
+	pathSplit := strings.Split(path, "/")
+
+	if len(pathSplit) == 2 && pathSplit[1] == "" {
+		if err := client.send(ctx, HTTPMessage(ok, nil, nil)); err != nil {
+			fmt.Println("Failed to send OK response for root request")
+			return
+		}
+
+		return
+	}
+
+	responseType := ok
+	contentType := "Content-Type: text/plain"
+	var content string
+	var contentLength string
+
+	switch pathSplit[1] {
+	case "echo":
+		content = strings.Join(pathSplit[2:], "/")
+	case "user-agent":
+		content = request.Headers["User-Agent"]
+	default:
+		responseType = not_found
+		if err := client.send(ctx, HTTPMessage(not_found, nil, nil)); err != nil {
+			fmt.Println("Failed to send NOT FOUND response for invalid request")
+			return
+		}
+		return
+	}
+
+	contentLength = fmt.Sprintf("Content-Length: %d", len(content))
+
+	httpMessage := HTTPMessage(
+		responseType,
+		&[]string{
+			contentType,
+			contentLength,
+		},
+		&content,
+	)
+
+	if err := client.send(
+		ctx,
+		httpMessage,
+	); err != nil {
+		fmt.Println("Failed to send OK response for echo request")
+		return
+	}
+}
+
 func main() {
 	l, err := net.Listen("tcp", "localhost:4221")
 	if err != nil {
@@ -128,83 +195,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	clientID := 0
-
 	for {
-		clientID++
-
 		conn, err := l.Accept()
-		if err != nil {
-			fmt.Printf("Failed to accept %d client connection\n", clientID)
-			os.Exit(1)
-		}
-
-		client, err := NewClient(conn, clientID)
 		if err != nil {
 			fmt.Println("Failed to accept client connection")
 			os.Exit(1)
 		}
 
-		defer client.close()
-
-		ctx := context.Background()
-
-		request, err := client.receive(ctx)
-		if err != nil {
-			fmt.Println("Failed to receive request")
-			os.Exit(1)
-		}
-
-		startLine := request.Protocol
-		path := strings.Split(startLine, " ")[1]
-		pathSplit := strings.Split(path, "/")
-
-		if len(pathSplit) == 2 && pathSplit[1] == "" {
-			if err := client.send(ctx, HTTPMessage(OK, nil, nil)); err != nil {
-				fmt.Println("Failed to send OK response for root request")
-				os.Exit(1)
-			}
-
-			return
-		}
-
-		responseType := OK
-		contentType := "Content-Type: text/plain"
-		var content string
-		var contentLength string
-
-		switch pathSplit[1] {
-		case "echo":
-			content = strings.Join(pathSplit[2:], "/")
-		case "user-agent":
-			content = request.Headers["User-Agent"]
-		default:
-			responseType = NOT_FOUND
-			if err := client.send(ctx, HTTPMessage(NOT_FOUND, nil, nil)); err != nil {
-				fmt.Println("Failed to send NOT FOUND response for invalid request")
-				os.Exit(1)
-			}
-			return
-		}
-
-		contentLength = fmt.Sprintf("Content-Length: %d", len(content))
-
-		httpMessage := HTTPMessage(
-			responseType,
-			&[]string{
-				contentType,
-				contentLength,
-			},
-			&content,
-		)
-
-		if err := client.send(
-			ctx,
-			httpMessage,
-		); err != nil {
-			fmt.Println("Failed to send OK response for echo request")
-			os.Exit(1)
-		}
-
+		go handleConnection(conn)
 	}
 }
