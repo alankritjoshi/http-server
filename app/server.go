@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -15,25 +16,45 @@ const (
 	not_found = "HTTP/1.1 404 NOT FOUND"
 )
 
-type client struct {
-	conn   net.Conn
-	reader *bufio.Reader
-	writer *bufio.Writer
+type request struct {
+	headers  map[string]string
+	protocol string
 }
 
-type Request struct {
-	Headers  map[string]string
-	Protocol string
+func buildResponse(protocol string, headers *[]string, content *string) string {
+	var builder strings.Builder
+
+	builder.WriteString(protocol + "\r\n")
+
+	if headers != nil {
+		builder.WriteString(strings.Join(*headers, "\r\n"))
+		builder.WriteString("\r\n")
+	}
+
+	builder.WriteString("\r\n")
+
+	if content != nil {
+		builder.WriteString(*content + "\r\n")
+	}
+
+	return builder.String()
 }
 
-func (c *client) receive(ctx context.Context) (*Request, error) {
+type connection struct {
+	conn     net.Conn
+	reader   *bufio.Reader
+	writer   *bufio.Writer
+	filesDir string
+}
+
+func (c *connection) receive(ctx context.Context) (*request, error) {
 	deadline, ok := ctx.Deadline()
 	if ok {
 		c.conn.SetReadDeadline(deadline)
 	}
 
 	headers := make(map[string]string)
-	var request Request
+	var request request
 
 	protocolProcessed := false
 	headersProcessed := false
@@ -54,10 +75,10 @@ func (c *client) receive(ctx context.Context) (*Request, error) {
 			line = strings.TrimSuffix(line, "\r\n")
 
 			if !protocolProcessed {
-				request.Protocol = line
+				request.protocol = line
 				protocolProcessed = true
 			} else if !headersProcessed && len(line) == 0 {
-				request.Headers = headers
+				request.headers = headers
 				return &request, nil
 			} else if !headersProcessed {
 				headerSplit := strings.Split(line, ": ")
@@ -69,7 +90,7 @@ func (c *client) receive(ctx context.Context) (*Request, error) {
 	}
 }
 
-func (c *client) send(ctx context.Context, message string) error {
+func (c *connection) send(ctx context.Context, message string) error {
 	deadline, ok := ctx.Deadline()
 	if ok {
 		c.conn.SetWriteDeadline(deadline)
@@ -88,65 +109,24 @@ func (c *client) send(ctx context.Context, message string) error {
 	}
 }
 
-func (c *client) close() {
-	c.conn.Close()
-}
-
-func newClient(conn net.Conn) (*client, error) {
-	return &client{
-		conn:   conn,
-		reader: bufio.NewReader(conn),
-		writer: bufio.NewWriter(conn),
-	}, nil
-}
-
-func HTTPMessage(protocol string, headers *[]string, content *string) string {
-	var builder strings.Builder
-
-	builder.WriteString(protocol + "\r\n")
-
-	if headers != nil {
-		builder.WriteString(strings.Join(*headers, "\r\n"))
-		builder.WriteString("\r\n")
-	}
-
-	builder.WriteString("\r\n")
-
-	if content != nil {
-		builder.WriteString(*content + "\r\n")
-	}
-
-	return builder.String()
-}
-
-func handleConnection(conn net.Conn) {
-	client, err := newClient(conn)
-	if err != nil {
-		fmt.Println("Failed to accept client connection")
-		return
-	}
-
-	defer client.close()
-
+func (c *connection) handle() error {
 	ctx := context.Background()
 
-	request, err := client.receive(ctx)
+	request, err := c.receive(ctx)
 	if err != nil {
-		fmt.Println("Failed to receive request")
-		return
+		return fmt.Errorf("failed to receive request")
 	}
 
-	startLine := request.Protocol
+	startLine := request.protocol
 	path := strings.Split(startLine, " ")[1]
 	pathSplit := strings.Split(path, "/")
 
 	if len(pathSplit) == 2 && pathSplit[1] == "" {
-		if err := client.send(ctx, HTTPMessage(ok, nil, nil)); err != nil {
-			fmt.Println("Failed to send OK response for root request")
-			return
+		if err := c.send(ctx, buildResponse(ok, nil, nil)); err != nil {
+			return fmt.Errorf("failed to send OK response for root request")
 		}
 
-		return
+		return nil
 	}
 
 	responseType := ok
@@ -158,19 +138,43 @@ func handleConnection(conn net.Conn) {
 	case "echo":
 		content = strings.Join(pathSplit[2:], "/")
 	case "user-agent":
-		content = request.Headers["User-Agent"]
+		content = request.headers["User-Agent"]
+	case "file":
+		fileName := strings.Join(pathSplit[2:], "/")
+
+		file, err := os.Open(c.filesDir + "/" + fileName)
+		if err != nil {
+			if os.IsNotExist(err) {
+				responseType = not_found
+
+				if err := c.send(ctx, buildResponse(not_found, nil, nil)); err != nil {
+					return fmt.Errorf("failed to send NOT FOUND response for invalid request")
+				}
+
+				return nil
+			}
+
+			return fmt.Errorf("failed to open file")
+		}
+
+		fileInfo, err := file.Stat()
+		if err != nil {
+			return fmt.Errorf("failed to get file info")
+		}
+
+		contentLength = fmt.Sprintf("Content-Length: %d", fileInfo.Size())
+		contentType = "Content-Type: application/octet-stream"
+
 	default:
 		responseType = not_found
-		if err := client.send(ctx, HTTPMessage(not_found, nil, nil)); err != nil {
-			fmt.Println("Failed to send NOT FOUND response for invalid request")
-			return
+		if err := c.send(ctx, buildResponse(not_found, nil, nil)); err != nil {
+			return fmt.Errorf("failed to send NOT FOUND response for invalid request")
 		}
-		return
 	}
 
 	contentLength = fmt.Sprintf("Content-Length: %d", len(content))
 
-	httpMessage := HTTPMessage(
+	httpMessage := buildResponse(
 		responseType,
 		&[]string{
 			contentType,
@@ -179,16 +183,39 @@ func handleConnection(conn net.Conn) {
 		&content,
 	)
 
-	if err := client.send(
+	if err := c.send(
 		ctx,
 		httpMessage,
 	); err != nil {
-		fmt.Println("Failed to send OK response for echo request")
-		return
+		return fmt.Errorf("failed to send OK response for echo request")
 	}
+
+	return nil
+}
+
+func (c *connection) close() {
+	c.conn.Close()
+}
+
+func newConnection(conn net.Conn, filesDir string) (*connection, error) {
+	return &connection{
+		conn:     conn,
+		reader:   bufio.NewReader(conn),
+		writer:   bufio.NewWriter(conn),
+		filesDir: filesDir,
+	}, nil
 }
 
 func main() {
+	dirFlag := flag.String("directory", ".", "directory to serve files from")
+
+	flag.Parse()
+
+	if err := os.MkdirAll(*dirFlag, 0755); err != nil {
+		fmt.Println("Failed to create directory")
+		os.Exit(1)
+	}
+
 	l, err := net.Listen("tcp", "localhost:4221")
 	if err != nil {
 		fmt.Println("Failed to bind to port 4221")
@@ -202,6 +229,20 @@ func main() {
 			os.Exit(1)
 		}
 
-		go handleConnection(conn)
+		c, err := newConnection(conn, *dirFlag)
+		if err != nil {
+			fmt.Println("Failed to create new connection")
+			os.Exit(1)
+		}
+
+		go func() {
+			defer c.close()
+
+			err := c.handle()
+			if err != nil {
+				fmt.Printf("Failed to handle connection: %v\n", err)
+				return
+			}
+		}()
 	}
 }
