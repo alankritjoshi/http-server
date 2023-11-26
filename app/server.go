@@ -21,7 +21,7 @@ type request struct {
 	protocol string
 }
 
-func buildResponse(protocol string, headers *[]string, content *string) string {
+func buildResponse(protocol string, headers *[]string, content string) []byte {
 	var builder strings.Builder
 
 	builder.WriteString(protocol + "\r\n")
@@ -33,11 +33,11 @@ func buildResponse(protocol string, headers *[]string, content *string) string {
 
 	builder.WriteString("\r\n")
 
-	if content != nil {
-		builder.WriteString(*content + "\r\n")
+	if len(content) != 0 {
+		builder.WriteString(content + "\r\n")
 	}
 
-	return builder.String()
+	return []byte(builder.String())
 }
 
 type connection struct {
@@ -90,7 +90,7 @@ func (c *connection) receive(ctx context.Context) (*request, error) {
 	}
 }
 
-func (c *connection) send(ctx context.Context, message string) error {
+func (c *connection) send(ctx context.Context, message []byte) error {
 	deadline, ok := ctx.Deadline()
 	if ok {
 		c.conn.SetWriteDeadline(deadline)
@@ -100,7 +100,7 @@ func (c *connection) send(ctx context.Context, message string) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
-		_, err := c.writer.WriteString(message)
+		_, err := c.writer.Write(message)
 		if err != nil {
 			return fmt.Errorf("unable to send message to client")
 		}
@@ -122,7 +122,7 @@ func (c *connection) handle() error {
 	pathSplit := strings.Split(path, "/")
 
 	if len(pathSplit) == 2 && pathSplit[1] == "" {
-		if err := c.send(ctx, buildResponse(ok, nil, nil)); err != nil {
+		if err := c.send(ctx, buildResponse(ok, nil, "")); err != nil {
 			return fmt.Errorf("failed to send OK response for root request")
 		}
 
@@ -130,64 +130,91 @@ func (c *connection) handle() error {
 	}
 
 	responseType := ok
-	contentType := "Content-Type: text/plain"
-	var content string
-	var contentLength string
+	var (
+		headers []string
+
+		stringContent string
+
+		fileContent []byte
+	)
 
 	switch pathSplit[1] {
 	case "echo":
-		content = strings.Join(pathSplit[2:], "/")
+		stringContent = strings.Join(pathSplit[2:], "/")
+		contentType := "Content-Type: text/plain"
+		contentLength := fmt.Sprintf("Content-Length: %d", len(stringContent))
+		headers = []string{
+			contentType,
+			contentLength,
+		}
 	case "user-agent":
-		content = request.headers["User-Agent"]
+		stringContent = request.headers["User-Agent"]
+		contentType := "Content-Type: text/plain"
+		contentLength := fmt.Sprintf("Content-Length: %d", len(stringContent))
+		headers = []string{
+			contentType,
+			contentLength,
+		}
 	case "file":
-		fileName := strings.Join(pathSplit[2:], "/")
+		fileName := c.filesDir + "/" + strings.Join(pathSplit[2:], "/")
 
-		file, err := os.Open(c.filesDir + "/" + fileName)
+		fileInfo, err := os.Stat(fileName)
+		if (err != nil && os.IsNotExist(err)) || fileInfo.IsDir() {
+			responseType = not_found
+			break
+		}
 		if err != nil {
-			if os.IsNotExist(err) {
-				responseType = not_found
-
-				if err := c.send(ctx, buildResponse(not_found, nil, nil)); err != nil {
-					return fmt.Errorf("failed to send NOT FOUND response for invalid request")
-				}
-
-				return nil
-			}
-
-			return fmt.Errorf("failed to open file")
+			return fmt.Errorf("failed to get file info for file name %s", fileName)
 		}
 
-		fileInfo, err := file.Stat()
+		file, err := os.Open(fileName)
 		if err != nil {
-			return fmt.Errorf("failed to get file info")
+			return fmt.Errorf("failed to open file: %w", err)
 		}
 
-		contentLength = fmt.Sprintf("Content-Length: %d", fileInfo.Size())
-		contentType = "Content-Type: application/octet-stream"
+		defer file.Close()
 
+		contentType := "Content-Type: application/octet-stream"
+		contentLength := fmt.Sprintf("Content-Length: %d", fileInfo.Size())
+
+		headers = []string{
+			contentType,
+			contentLength,
+		}
+
+		reader := bufio.NewReader(file)
+
+		fileContent, err = io.ReadAll(reader)
+		if err != nil {
+			return fmt.Errorf("failed to read file: %w", err)
+		}
 	default:
 		responseType = not_found
-		if err := c.send(ctx, buildResponse(not_found, nil, nil)); err != nil {
-			return fmt.Errorf("failed to send NOT FOUND response for invalid request")
+		if err := c.send(ctx, buildResponse(not_found, nil, "")); err != nil {
+			return fmt.Errorf("failed to send NOT FOUND response for invalid request: %w", err)
 		}
 	}
 
-	contentLength = fmt.Sprintf("Content-Length: %d", len(content))
-
 	httpMessage := buildResponse(
 		responseType,
-		&[]string{
-			contentType,
-			contentLength,
-		},
-		&content,
+		&headers,
+		stringContent,
 	)
 
 	if err := c.send(
 		ctx,
 		httpMessage,
 	); err != nil {
-		return fmt.Errorf("failed to send OK response for echo request")
+		return fmt.Errorf("failed to send http response %v: %w", httpMessage, err)
+	}
+
+	if fileContent != nil {
+		if err := c.send(
+			ctx,
+			fileContent,
+		); err != nil {
+			return fmt.Errorf("failed to send file content: %w", err)
+		}
 	}
 
 	return nil
