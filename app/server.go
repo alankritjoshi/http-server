@@ -8,17 +8,20 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 )
 
 const (
 	ok        = "HTTP/1.1 200 OK"
+	created   = "HTTP/1.1 201 CREATED"
 	not_found = "HTTP/1.1 404 NOT FOUND"
 )
 
 type request struct {
 	headers  map[string]string
 	protocol string
+	content  string
 }
 
 func buildResponse(protocol string, headers *[]string, content string) []byte {
@@ -59,6 +62,11 @@ func (c *connection) receive(ctx context.Context) (*request, error) {
 	protocolProcessed := false
 	headersProcessed := false
 
+	contentExpectedLength := 0
+	contentProcessedLength := 0
+
+	var contentBuilder strings.Builder
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -77,14 +85,28 @@ func (c *connection) receive(ctx context.Context) (*request, error) {
 			if !protocolProcessed {
 				request.protocol = line
 				protocolProcessed = true
-			} else if !headersProcessed && len(line) == 0 {
-				request.headers = headers
-				return &request, nil
 			} else if !headersProcessed {
-				headerSplit := strings.Split(line, ": ")
-				headers[headerSplit[0]] = headerSplit[1]
+				if len(line) == 0 {
+					request.headers = headers
+					headersProcessed = true
+					if _, ok := request.headers["Content-Length"]; !ok {
+						return &request, nil
+					}
+					contentExpectedLength, err = strconv.Atoi(request.headers["Content-Length"])
+					if err != nil {
+						return nil, fmt.Errorf("invalid content length")
+					}
+				} else {
+					headerSplit := strings.Split(line, ": ")
+					headers[headerSplit[0]] = headerSplit[1]
+				}
 			} else {
-				return nil, fmt.Errorf("invalid request")
+				contentBuilder.WriteString(line)
+				contentProcessedLength += len(line)
+				if contentProcessedLength == contentExpectedLength {
+					request.content = contentBuilder.String()
+					return &request, nil
+				}
 			}
 		}
 	}
@@ -218,7 +240,7 @@ func (c *connection) handlePost(ctx context.Context, request *request) error {
 	path := strings.Split(startLine, " ")[1]
 	pathSplit := strings.Split(path, "/")
 
-	if len(pathSplit) > 2 || pathSplit[1] != "files" || pathSplit[2] != c.filesDir {
+	if len(pathSplit) < 4 || pathSplit[1] != "files" || pathSplit[2] != c.filesDir {
 		if err := c.send(ctx, buildResponse(not_found, nil, "")); err != nil {
 			return fmt.Errorf("failed to send NOT FOUND response for invalid request")
 		}
@@ -226,30 +248,26 @@ func (c *connection) handlePost(ctx context.Context, request *request) error {
 		return nil
 	}
 
-	responseType := ok
-
 	fileName := strings.Join(pathSplit[2:], "/")
 
-	file, err := os.Open(fileName)
+	file, err := os.Create(fileName)
 	if err != nil {
-		return fmt.Errorf("failed to open file: %w", err)
+		return fmt.Errorf("failed to create file at %s: %w", fileName, err)
 	}
 
 	defer file.Close()
 
-	contentType := "Content-Type: application/octet-stream"
-	contentLength := fmt.Sprintf("Content-Length: %d", fileInfo.Size())
+	file.WriteString(request.content)
 
-	headers = []string{
-		contentType,
-		contentLength,
-	}
-
-	reader := bufio.NewReader(file)
-
-	fileContent, err = io.ReadAll(reader)
-	if err != nil {
-		return fmt.Errorf("failed to read file: %w", err)
+	if err := c.send(
+		ctx,
+		buildResponse(
+			created,
+			nil,
+			"",
+		),
+	); err != nil {
+		return fmt.Errorf("failed to send OK response for POST request")
 	}
 
 	return nil
