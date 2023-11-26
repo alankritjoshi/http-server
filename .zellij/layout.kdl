@@ -4,10 +4,13 @@ layout {
             name "Editing HTTP Server"
             size "65%"
         }
-        pane command="go" {
-            name "Test - Start Server"
-            start_suspended true
-            args "run" "app/server.go"
+        pane split_direction="horizontal" {
+            pane command="go" {
+                name "Test - Start Server"
+                start_suspended true
+                args "run" "app/server.go" "--directory" "tmp"
+            }
+            pane
         }
     }
     pane size=1 borderless=true {
