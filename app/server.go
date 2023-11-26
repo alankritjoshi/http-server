@@ -109,14 +109,7 @@ func (c *connection) send(ctx context.Context, message []byte) error {
 	}
 }
 
-func (c *connection) handle() error {
-	ctx := context.Background()
-
-	request, err := c.receive(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to receive request")
-	}
-
+func (c *connection) handleGet(ctx context.Context, request *request) error {
 	startLine := request.protocol
 	path := strings.Split(startLine, " ")[1]
 	pathSplit := strings.Split(path, "/")
@@ -215,6 +208,74 @@ func (c *connection) handle() error {
 		); err != nil {
 			return fmt.Errorf("failed to send file content: %w", err)
 		}
+	}
+
+	return nil
+}
+
+func (c *connection) handlePost(ctx context.Context, request *request) error {
+	startLine := request.protocol
+	path := strings.Split(startLine, " ")[1]
+	pathSplit := strings.Split(path, "/")
+
+	if len(pathSplit) > 2 || pathSplit[1] != "files" || pathSplit[2] != c.filesDir {
+		if err := c.send(ctx, buildResponse(not_found, nil, "")); err != nil {
+			return fmt.Errorf("failed to send NOT FOUND response for invalid request")
+		}
+
+		return nil
+	}
+
+	responseType := ok
+
+	fileName := strings.Join(pathSplit[2:], "/")
+
+	file, err := os.Open(fileName)
+	if err != nil {
+		return fmt.Errorf("failed to open file: %w", err)
+	}
+
+	defer file.Close()
+
+	contentType := "Content-Type: application/octet-stream"
+	contentLength := fmt.Sprintf("Content-Length: %d", fileInfo.Size())
+
+	headers = []string{
+		contentType,
+		contentLength,
+	}
+
+	reader := bufio.NewReader(file)
+
+	fileContent, err = io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read file: %w", err)
+	}
+
+	return nil
+}
+
+func (c *connection) handle() error {
+	ctx := context.Background()
+
+	request, err := c.receive(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to receive request")
+	}
+
+	requestVerb := strings.Split(request.protocol, " ")[0]
+
+	switch requestVerb {
+	case "GET":
+		if err := c.handleGet(ctx, request); err != nil {
+			return fmt.Errorf("failed to handle GET request: %w", err)
+		}
+	case "POST":
+		if err := c.handlePost(ctx, request); err != nil {
+			return fmt.Errorf("failed to handle POST request: %w", err)
+		}
+	default:
+		return fmt.Errorf("invalid/unsupported request verb: %s", requestVerb)
 	}
 
 	return nil
