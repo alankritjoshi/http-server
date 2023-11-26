@@ -155,7 +155,7 @@ func (c *connection) handle() error {
 			contentType,
 			contentLength,
 		}
-	case "file":
+	case "files":
 		fileName := c.filesDir + "/" + strings.Join(pathSplit[2:], "/")
 
 		fileInfo, err := os.Stat(fileName)
