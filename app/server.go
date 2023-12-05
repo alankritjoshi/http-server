@@ -10,12 +10,14 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
 	ok        = "HTTP/1.1 200 OK"
 	created   = "HTTP/1.1 201 CREATED"
 	not_found = "HTTP/1.1 404 NOT FOUND"
+	timeout   = 5 * time.Second
 )
 
 type request struct {
@@ -52,27 +54,23 @@ type connection struct {
 
 func (c *connection) receive(ctx context.Context) (*request, error) {
 	deadline, ok := ctx.Deadline()
-	if ok {
-		c.conn.SetReadDeadline(deadline)
+	if !ok {
+		return nil, fmt.Errorf("no deadline set on context")
 	}
+
+	c.conn.SetReadDeadline(deadline)
 
 	headers := make(map[string]string)
 	var request request
 
 	protocolProcessed := false
-	headersProcessed := false
-
-	contentExpectedLength := 0
-	contentProcessedLength := 0
-
-	var contentBuilder strings.Builder
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
-			line, err := c.reader.ReadString('\n')
+			lineBytes, err := c.reader.ReadBytes('\n')
 			if err != nil {
 				if err == io.EOF {
 					break
@@ -80,34 +78,47 @@ func (c *connection) receive(ctx context.Context) (*request, error) {
 				return nil, err
 			}
 
-			line = strings.TrimSuffix(line, "\r\n")
+			line := strings.TrimSuffix(string(lineBytes), "\r\n")
 
+			// process protocol
 			if !protocolProcessed {
 				request.protocol = line
 				protocolProcessed = true
-			} else if !headersProcessed {
-				if len(line) == 0 {
-					request.headers = headers
-					headersProcessed = true
-					if _, ok := request.headers["Content-Length"]; !ok {
-						return &request, nil
-					}
-					contentExpectedLength, err = strconv.Atoi(request.headers["Content-Length"])
-					if err != nil {
-						return nil, fmt.Errorf("invalid content length")
-					}
-				} else {
-					headerSplit := strings.Split(line, ": ")
-					headers[headerSplit[0]] = headerSplit[1]
-				}
-			} else {
-				contentBuilder.WriteString(line)
-				contentProcessedLength += len(line)
-				if contentProcessedLength == contentExpectedLength {
-					request.content = contentBuilder.String()
-					return &request, nil
-				}
+				continue
 			}
+
+			// process header
+			if len(line) != 0 {
+				headerSplit := strings.Split(line, ": ")
+				headers[headerSplit[0]] = headerSplit[1]
+				continue
+			}
+
+			// set headers
+			request.headers = headers
+			if _, ok := request.headers["Content-Length"]; !ok {
+				return &request, nil
+			}
+
+			// if content length is not 0, read content
+			contentLength, err := strconv.Atoi(request.headers["Content-Length"])
+			if err != nil {
+				return nil, fmt.Errorf("invalid content length")
+			}
+
+			buffer := make([]byte, contentLength)
+			n, err := c.reader.Read(buffer)
+			if err != nil {
+				return nil, err
+			}
+
+			if n != contentLength {
+				return nil, fmt.Errorf("invalid content length")
+			}
+
+			request.content += string(buffer[:])
+
+			return &request, nil
 		}
 	}
 }
@@ -274,11 +285,13 @@ func (c *connection) handlePost(ctx context.Context, request *request) error {
 }
 
 func (c *connection) handle() error {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+
+	defer cancel()
 
 	request, err := c.receive(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to receive request")
+		return fmt.Errorf("failed to receive request: %w", err)
 	}
 
 	requestVerb := strings.Split(request.protocol, " ")[0]

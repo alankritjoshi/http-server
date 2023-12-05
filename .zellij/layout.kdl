@@ -1,12 +1,16 @@
 layout {
+  tab "HTTP Server" cwd="app" {
     pane split_direction="vertical" {
-        pane edit="app/server.go" {
+        pane edit="server.go" {
             name "Editing HTTP Server"
             size "65%"
         }
         pane split_direction="horizontal" {
-            pane command="go" {
+            pane command="air" {
                 name "Test - Start Server"
+                start_suspended false
+                args "--build.cmd" "go build -o tmp/main server.go" "--build.args_bin" "--directory,tmp" "--build.delay" "0" "--misc.clean_on_exit" "true"
+            }
                 start_suspended true
                 args "run" "app/server.go" "--directory" "tmp"
             }
