@@ -251,7 +251,7 @@ func (c *connection) handlePost(ctx context.Context, request *request) error {
 	path := strings.Split(startLine, " ")[1]
 	pathSplit := strings.Split(path, "/")
 
-	if len(pathSplit) < 4 || pathSplit[1] != "files" || pathSplit[2] != c.filesDir {
+	if len(pathSplit) < 3 || pathSplit[1] != "files" {
 		if err := c.send(ctx, buildResponse(not_found, nil, "")); err != nil {
 			return fmt.Errorf("failed to send NOT FOUND response for invalid request")
 		}
@@ -259,7 +259,7 @@ func (c *connection) handlePost(ctx context.Context, request *request) error {
 		return nil
 	}
 
-	fileName := strings.Join(pathSplit[2:], "/")
+	fileName := c.filesDir + "/" + strings.Join(pathSplit[2:], "/")
 
 	file, err := os.Create(fileName)
 	if err != nil {
