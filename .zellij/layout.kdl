@@ -11,14 +11,21 @@ layout {
                 start_suspended false
                 args "--build.cmd" "go build -o tmp/main server.go" "--build.args_bin" "--directory,tmp" "--build.delay" "0" "--misc.clean_on_exit" "true"
             }
+            pane command="http" {
+                name "Test - HTTP POST Request"
                 start_suspended true
-                args "run" "app/server.go" "--directory" "tmp"
+                args "POST" "http://localhost:4221/files/donkey_yikes_humpty_Horsey" "--raw" "vanilla dooby yikes Monkey scooby Coo yikes dumpty"
             }
-            pane
+            pane command="http" {
+                name "Test - HTTP GET Request"
+                start_suspended true
+                args "GET" "http://localhost:4221/files/donkey_yikes_humpty_Horsey"
+            }
         }
     }
     pane size=1 borderless=true {
         plugin location="zellij:compact-bar"
     }
+  }
 }
 
